@@ -1,4 +1,4 @@
 ott-scraper
 ===========
 
-A python script to scrpae the plaintext of the One True Thread.
+A python script to scrape the plaintext of the One True Thread.
