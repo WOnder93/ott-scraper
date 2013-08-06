@@ -129,12 +129,30 @@ class OTTParser(HTMLParser):
             self.codebox = -1
         self.level -= 1
 
+import time, sys
+
+def timed(name=None):
+    def decorator(fn):
+        _name = name
+        if _name == None:
+            _name = fn.__name__
+        def measure(*args, **kwargs):
+            s = time.time()
+            try:
+                res = fn(*args, **kwargs)
+            finally:
+                sys.stderr.write('{0}: {1}s\n'.format(_name, time.time() - s))
+            return res
+        return measure
+    return decorator
+
 from urllib2 import urlopen
 import codecs
 import sys
 from argparse import ArgumentParser
 
 argparser = ArgumentParser(description='Scrapes the plaintext from the OTT')
+argparser.add_argument('-t, --threads', dest='threads', action='store_true', help='open connections on a separate thread (makes scraping much faster)')
 argparser.add_argument('-q, --quotes', dest='quotes', action='store_true', help='include quotes')
 argparser.add_argument('-s, --strike', dest='strike', action='store_true', help='include strikethroughs')
 argparser.add_argument('-p, --spoiler', dest='spoiler', action='store_true', help='include spoilers')
@@ -147,14 +165,51 @@ args = argparser.parse_args()
 
 output = codecs.getwriter('utf-8')(args.outfile)
 
-for NP in xrange(0, args.PAGES_MAX):
-    sys.stderr.write('Page {0}/{1} - {2:.2f}%\n'.format(NP, args.PAGES_MAX, 100.0 * float(NP) / args.PAGES_MAX))
-    input = codecs.getreader('utf-8')(urlopen('http://forums.xkcd.com/viewtopic.php?f=7&t=101043&start={0}'.format(NP * 40)))
+#@timed()
+def open_newpage(NP):
+    return codecs.getreader('utf-8')(urlopen('http://forums.xkcd.com/viewtopic.php?f=7&t=101043&start={0}'.format(NP * 40)))
 
+#@timed()
+def parse_newpage(NP, input):
+    sys.stderr.write('Page {0}/{1} - {2:.2f}%\n'.format(NP, args.PAGES_MAX, 100.0 * float(NP) / args.PAGES_MAX))
+    
     parser = OTTParser(output, args.quotes, args.strike, args.spoiler, args.code, args.smileys)
     for text in input:
         parser.feed(text)
     input.close()
+
+if args.threads:
+    import os
+    from threading import Thread, Semaphore
+    from collections import deque
+    
+    pool = deque()
+    avail_semaphore = Semaphore(0)
+    free_semaphore = Semaphore(50)
+    def opener():
+        for NP in xrange(0, args.PAGES_MAX):
+            input = open_newpage(NP)
+            free_semaphore.acquire()
+            pool.append(input)
+            avail_semaphore.release()
+        #sys.stderr.write('Opener done!\n')
+    
+    Thread(None, opener).start()
+    for NP in xrange(0, args.PAGES_MAX):
+        avail_semaphore.acquire()
+        input = pool.popleft()
+        free_semaphore.release()
+        
+        parse_newpage(NP, input)
+else:
+    for NP in xrange(0, args.PAGES_MAX):
+        input = codecs.getreader('utf-8')(urlopen('http://forums.xkcd.com/viewtopic.php?f=7&t=101043&start={0}'.format(NP * 40)))
+
+        sys.stderr.write('Page {0}/{1} - {2:.2f}%\n'.format(NP, args.PAGES_MAX, 100.0 * float(NP) / args.PAGES_MAX))
+        parser = OTTParser(output, args.quotes, args.strike, args.spoiler, args.code, args.smileys)
+        for text in input:
+            parser.feed(text)
+        input.close()
 
 sys.stderr.write('DONE!\n')
 args.outfile.close()
